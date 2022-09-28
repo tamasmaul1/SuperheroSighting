@@ -1,0 +1,188 @@
+package com.example.superhero.dao;
+
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.List;
+
+import org.springframework.stereotype.Repository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
+
+import com.example.superhero.dao.SightingDaoImpl.SightingMapper;
+import com.example.superhero.dao.SuperpowerDaoImpl.SuperpowerMapper;
+import com.example.superhero.models.Hero;
+import com.example.superhero.models.Location;
+import com.example.superhero.models.Sighting;
+import com.example.superhero.models.Superpower;
+
+@Repository
+public class HeroDaoImpl implements HeroDao{
+
+    @Autowired
+    JdbcTemplate jdbc;
+
+    @Autowired
+    SightingDaoImpl sightingDaoDB;
+    
+    @Override
+    public Hero getHeroById(int id) {
+        try {
+            final String SELECT_HERO_BY_ID = "SELECT * FROM Hero WHERE HeroId = ?";
+            Hero hero = jdbc.queryForObject(SELECT_HERO_BY_ID, new HeroMapper(), id);
+            hero.setSuperpowers(getSuperpowersForHero(id));
+            hero.setSightings(getSightingsForHero(id));
+            return hero;
+        } catch (DataAccessException ex) {
+            return null;
+        }
+    }
+
+    @Override
+    public List<Hero> getAllHeros() {
+        final String SELECT_ALL_HEROS = "SELECT * FROM Hero";
+        List<Hero> heros = jdbc.query(SELECT_ALL_HEROS, new HeroMapper());
+        associateSuperpowersAndSightings(heros);
+        return heros;
+    }
+
+    private List<Sighting> getSightingsForHero(int id) {
+        final String SELECT_SIGHTINGS_FOR_HERO = "SELECT * FROM Sighting WHERE HeroId = ?";
+        List<Sighting> sighthings = jdbc.query(SELECT_SIGHTINGS_FOR_HERO, new SightingMapper(), id);
+        sightingDaoDB.associateLocationsForSightings(sighthings);
+        return sighthings;
+    }
+
+    private List<Superpower> getSuperpowersForHero(int id) {
+        final String SELECT_SUPERPOWERS_FOR_HERO = "SELECT s.* FROM Superpower s "
+                + "JOIN HeroSuperpower hs ON hs.SuperpowerId = s.SuperpowerId WHERE hs.HeroId = ?";
+        return jdbc.query(SELECT_SUPERPOWERS_FOR_HERO, new SuperpowerMapper(), id);
+    }
+
+    public void associateSuperpowersAndSightings(List<Hero> heros) {
+        for (Hero hero : heros) {
+            hero.setSuperpowers(getSuperpowersForHero(hero.getId()));
+            hero.setSightings(getSightingsForHero(hero.getId()));
+        }
+    }
+
+    @Override
+    public Hero addHero(Hero hero) {
+        final String INSERT_HERO = "INSERT INTO Hero(AttrHero, Name, Description) "
+                + "VALUES(?,?,?)";
+        jdbc.update(INSERT_HERO,
+                hero.getAttrHero(),
+                hero.getName(),
+                hero.getDescription());
+        
+        int newId = jdbc.queryForObject("SELECT LASTVAL()", Integer.class);
+        hero.setId(newId);
+        insertHeroSuperpower(hero);
+        insertSighting(hero);
+        return hero;
+    }
+
+    private void insertHeroSuperpower(Hero hero){
+        final String INSERT_HERO_SUPERPOWER = "INSERT INTO "
+                + "HeroSuperpower(HeroId, SuperpowerId) VALUES(?,?)";
+        for(Superpower superpower : hero.getSuperpowers()) {
+            jdbc.update(INSERT_HERO_SUPERPOWER, 
+                    hero.getId(),
+                    superpower.getId());
+        }
+    }
+
+    private void insertSighting(Hero hero){
+        final String INSERT_SIGHTING = "INSERT INTO "
+                + "Sighting(HeroId, LocationId, Date) VALUES(?,?,?)";
+        for(Sighting sighting : hero.getSightings()){
+            jdbc.update(INSERT_SIGHTING,
+                    hero.getId(),
+                    sighting.getLocation().getId(),
+                    sighting.getDate());
+            int newId = jdbc.queryForObject("SELECT LASTVAL()", Integer.class);
+            sighting.setId(newId);
+        }
+    }
+
+    @Override
+    public void updateHero(Hero hero) {
+        final String UPDATE_HERO = "UPDATE Hero SET AttrHero = ?, Name = ?, Description = ?"
+                + "WHERE HeroId = ?";
+        jdbc.update(UPDATE_HERO,
+                hero.getAttrHero(),
+                hero.getName(),
+                hero.getDescription(),
+                hero.getId());
+        
+        final String DELETE_HERO_SUPERPOWER = "DELETE FROM HeroSuperpower WHERE HeroId = ?";
+        jdbc.update(DELETE_HERO_SUPERPOWER, hero.getId());
+        insertHeroSuperpower(hero);
+        
+        final String DELETE_SIGHTING = "DELETE FROM Sighting WHERE HeroId = ?";
+        jdbc.update(DELETE_SIGHTING, hero.getId());
+        insertSighting(hero);
+    }
+
+    @Override
+    public void deleteHeroById(int id) {
+        final String DELETE_HERO_SUPERPOWER = "DELETE FROM HeroSuperpower WHERE HeroId = ?";
+        jdbc.update(DELETE_HERO_SUPERPOWER, id);
+        
+        final String DELETE_HERO_ORGANIZATION = "DELETE FROM HeroOrganization WHERE HeroId = ?";
+        jdbc.update(DELETE_HERO_ORGANIZATION, id);
+        
+        final String DELETE_HEROSIGHTING = "DELETE FROM Sighting WHERE HeroId = ?";
+        jdbc.update(DELETE_HEROSIGHTING, id);
+        
+        final String DELETE_HERO = "DELETE FROM Hero WHERE HeroId = ?";
+        jdbc.update(DELETE_HERO, id);
+    }
+
+    @Override
+    public List<Hero> getHerosForSuperpower(Superpower superpower) {
+        final String SELECT_HEROS_FOR_SUPERPOWER = "SELECT h.* FROM Hero h JOIN "
+                + "HeroSuperpower hs ON hs.HeroId = h.HeroId WHERE hs.SuperpowerId = ?";
+        List<Hero> heros = jdbc.query(SELECT_HEROS_FOR_SUPERPOWER, 
+                new HeroMapper(), superpower.getId());
+        associateSuperpowersAndSightings(heros);
+        return heros;
+    }
+
+    @Override
+    public Hero getHeroForSighting(Sighting sighting) {
+        final String SELECT_HEROS_FOR_SIGHTING = "SELECT h.* FROM Hero h JOIN "
+                + "Sighting s ON s.HeroId = h.HeroId WHERE s.SightingId = ?";
+        Hero hero = jdbc.queryForObject(SELECT_HEROS_FOR_SIGHTING, 
+                new HeroMapper(), sighting.getId());
+        hero.setSuperpowers(getSuperpowersForHero(hero.getId()));
+        hero.setSightings(getSightingsForHero(hero.getId()));
+        return hero;
+    }
+
+    @Override
+    public List<Hero> getHerosForLocation(Location location) {
+        final String SELECT_HEROS_FOR_LOCATION = "SELECT h.* FROM Hero h "
+                + "JOIN Sighting s ON s.HeroId = h.HeroId "
+                + "WHERE s.LocationId = ?";
+        List<Hero> heros = jdbc.query(SELECT_HEROS_FOR_LOCATION, 
+                new HeroMapper(), location.getId());
+        associateSuperpowersAndSightings(heros);
+        return heros;
+    }
+
+    public static final class HeroMapper implements RowMapper<Hero> {
+
+        @Override
+        public Hero mapRow(ResultSet rs, int index) throws SQLException {
+            Hero hero = new Hero();
+            hero.setId(rs.getInt("HeroId"));
+            hero.setAttrHero(rs.getBoolean("AttrHero"));
+            hero.setName(rs.getString("Name"));
+            hero.setDescription(rs.getString("Description"));
+            return hero;
+        }
+    }
+    
+}
